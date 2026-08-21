@@ -1,0 +1,64 @@
+name: Veyra AI Preview APK
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'veyra-preview/**'
+      - '.github/workflows/veyra-preview-apk.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 8.11.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK 35
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0'
+
+      - name: Build preview APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle -p veyra-preview --no-daemon assembleDebug
+          apk='veyra-preview/app/build/outputs/apk/debug/app-debug.apk'
+          test -f "$apk"
+          mkdir -p out
+          cp "$apk" out/VeyraAI-Preview-v0.1.apk
+          sha256sum out/VeyraAI-Preview-v0.1.apk | tee out/VeyraAI-Preview-v0.1.sha256
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: veyra-ai-preview-apk
+          path: |
+            out/VeyraAI-Preview-v0.1.apk
+            out/VeyraAI-Preview-v0.1.sha256
+          if-no-files-found: error
+          retention-days: 7
