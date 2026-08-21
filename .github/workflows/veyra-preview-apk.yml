@@ -42,6 +42,32 @@ jobs:
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0'
 
+      - name: Apply preview renderer compile fix
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('veyra-preview/app/src/main/java/ai/veyra/preview/MainActivity.java')
+          s = p.read_text()
+          s = s.replace(
+              'drawPortrait(c, getWidth() / 2f, getHeight() * .48f, true);',
+              'drawPortrait(c, getWidth() / 2f, getHeight() * .48f, true, getWidth(), getHeight());'
+          )
+          s = s.replace(
+              'drawPortrait(c, mid, getHeight() * .48f, false);',
+              'drawPortrait(c, mid, getHeight() * .48f, false, getWidth(), getHeight());'
+          )
+          s = s.replace(
+              'drawPortrait(c, mid, getHeight() * .48f, true);',
+              'drawPortrait(c, mid, getHeight() * .48f, true, getWidth(), getHeight());'
+          )
+          s = s.replace(
+              'private void drawPortrait(Canvas c, float cx, float cy, boolean styled) {\n        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);\n        float scale = Math.min(getWidth(), getHeight()) / 410f;',
+              'private void drawPortrait(Canvas c, float cx, float cy, boolean styled, float viewWidth, float viewHeight) {\n        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);\n        float scale = Math.min(viewWidth, viewHeight) / 410f;'
+          )
+          p.write_text(s)
+          PY
+
       - name: Build preview APK
         shell: bash
         run: |
