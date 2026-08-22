@@ -1,0 +1,27 @@
+name: Codespace Build Relay Probe
+
+on:
+  push:
+    branches: [ codespace-build-relay ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify GitHub-hosted runner
+        run: |
+          echo "GITHUB_HOSTED_RUNNER_OK=true"
+          uname -a
+          java -version || true
+          mkdir -p out
+          echo ok > out/probe.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: codespace-build-relay-probe
+          path: out/probe.txt
