@@ -25,13 +25,20 @@ public final class ChatDomBridgeTest {
     }
 
     @Test
-    public void pasteSendScriptTargetsVsCodeChatInputAndSendAction() {
-        String script = ChatDomBridge.pasteAndSendScript("hello 'world'");
+    public void pasteScriptTargetsVsCodeChatInput() {
+        String script = ChatDomBridge.pastePromptScript("hello 'world'");
         assertTrue(script.contains("interactive-input-part"));
         assertTrue(script.contains("monaco-editor[role=\\\"code\\\"]"));
         assertTrue(script.contains("textarea"));
         assertTrue(script.contains("native-edit-context"));
-        assertTrue(script.contains("codicon-arrow-up-compact"));
         assertTrue(script.contains("hello \\'world\\'"));
+    }
+
+    @Test
+    public void sendScriptTargetsEnabledVsCodeSendAction() {
+        String script = ChatDomBridge.sendPromptScript();
+        assertTrue(script.contains("chat-execute-toolbar"));
+        assertTrue(script.contains("action-item:not(.disabled)"));
+        assertTrue(script.contains("codicon-arrow-up-compact"));
     }
 }
