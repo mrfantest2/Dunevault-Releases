@@ -27,6 +27,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
+import android.view.WindowManager;
 import android.view.inputmethod.InputMethodManager;
 import android.webkit.CookieManager;
 import android.webkit.RenderProcessGoneDetail;
@@ -396,7 +397,7 @@ public final class BrowserSessionActivity extends Activity {
         if (webView == null) return;
         webView.setFocusable(true);
         webView.setFocusableInTouchMode(true);
-        webView.setShowSoftInputOnFocus(false);
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM);
         hideKeyboard();
     }
 
@@ -566,15 +567,18 @@ public final class BrowserSessionActivity extends Activity {
     private void applyInputModeState() {
         if (webView != null) {
             boolean focusable = InputModePolicy.shouldKeepWebViewFocusable(touchLocked);
+            boolean allowSoftInput = InputModePolicy.shouldShowSoftInput(touchLocked, keyboardLocked);
             webView.setFocusable(focusable);
             webView.setFocusableInTouchMode(focusable);
-            webView.setShowSoftInputOnFocus(
-                    InputModePolicy.shouldShowSoftInput(touchLocked, keyboardLocked)
-            );
+            if (allowSoftInput) {
+                getWindow().clearFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM);
+            } else {
+                getWindow().addFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM);
+            }
             if (touchLocked) {
                 webView.clearFocus();
             }
-            if (touchLocked || keyboardLocked) {
+            if (!allowSoftInput) {
                 hideKeyboard();
             }
         }
