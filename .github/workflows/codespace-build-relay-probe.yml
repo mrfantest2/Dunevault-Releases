@@ -3,6 +3,8 @@ name: Codespace Build Relay Probe
 on:
   push:
     branches: [ codespace-build-relay ]
+  pull_request:
+    branches: [ main ]
   workflow_dispatch:
 
 permissions:
