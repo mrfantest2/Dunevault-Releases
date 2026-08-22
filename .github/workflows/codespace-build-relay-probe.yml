@@ -1,0 +1,80 @@
+name: Build Fantest Codespace APK
+
+on:
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codespace-public-relay-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: codespace-build
+
+    steps:
+      - name: Checkout relay source
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK 35
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Test and build APK
+        shell: bash
+        run: |
+          set -o pipefail
+          gradle --no-daemon clean testDebugUnitTest assembleDebug --stacktrace 2>&1 | tee gradle-build.log
+
+      - name: Prepare APK artifact
+        if: success()
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/debug/app-debug.apk dist/FantestCodespace-v1.0.2-debug.apk
+          sha256sum dist/FantestCodespace-v1.0.2-debug.apk > dist/SHA256SUMS.txt
+          ls -lh dist/
+
+      - name: Upload APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: FantestCodespace-v1.0.2
+          path: |
+            codespace-build/dist/FantestCodespace-v1.0.2-debug.apk
+            codespace-build/dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload Gradle log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: FantestCodespace-gradle-log-${{ github.run_id }}
+          path: codespace-build/gradle-build.log
+          if-no-files-found: warn
+          retention-days: 7

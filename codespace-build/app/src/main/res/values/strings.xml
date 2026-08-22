@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">Fantest Codespace</string>
+    <string name="keep_alive_channel_name">Codespace Keep Alive</string>
+    <string name="keep_alive_channel_description">Keeps the user-visible Codespace session promoted while the app is in use.</string>
+    <string name="keep_alive_notification_title">Fantest Codespace</string>
+    <string name="keep_alive_notification_text">Keep Alive active</string>
+    <string name="background_setup_title">Background readiness</string>
+    <string name="background_setup_explanation">For the most reliable background session, allow notifications, remove battery optimization, and disable Pause app activity if unused in App Info.</string>
+</resources>
