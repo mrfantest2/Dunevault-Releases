@@ -7,13 +7,19 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.graphics.Insets;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.SystemClock;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowInsets;
+import android.view.inputmethod.InputMethodManager;
 import android.webkit.CookieManager;
 import android.webkit.RenderProcessGoneDetail;
 import android.webkit.URLUtil;
@@ -36,25 +42,87 @@ public final class BrowserSessionActivity extends Activity {
     private static final int REQUEST_FILE_CHOOSER = 6401;
     private static final int REQUEST_STORAGE = 6402;
     private static final String PREF_LAST_HTTPS_URL = "last_https_url";
+    private static final String STATE_TOUCH_LOCKED = "touch_locked";
+    private static final long RECONNECT_POLL_MS = 3_000L;
+    private static final String DISCONNECT_PROBE_JS =
+            "(function(){try{" +
+                    "var t=((document.body&&document.body.innerText)||'').toLowerCase();" +
+                    "return t.indexOf('disconnected. attempting to reconnect')>=0" +
+                    "||(t.indexOf('reload window')>=0&&t.indexOf('disconnected')>=0);" +
+                    "}catch(e){return false;}})();";
 
+    private final Handler reconnectHandler = new Handler(Looper.getMainLooper());
+
+    private LinearLayout rootLayout;
     private FrameLayout webContainer;
     private WebView webView;
     private ProgressBar pageProgress;
     private Button backButton;
     private Button forwardButton;
+    private Button touchLockButton;
     private ValueCallback<Uri[]> fileChooserCallback;
     private PendingDownload pendingDownload;
+    private boolean touchLocked;
+    private boolean appForeground;
+    private long disconnectedSinceMs = -1L;
+    private long lastAutoRecoveryMs = -1L;
+
+    private final Runnable reconnectProbe = new Runnable() {
+        @Override
+        public void run() {
+            if (!appForeground || webView == null) return;
+
+            final WebView observedWebView = webView;
+            observedWebView.evaluateJavascript(DISCONNECT_PROBE_JS, result -> {
+                if (!appForeground || observedWebView != webView) return;
+
+                boolean disconnected = "true".equalsIgnoreCase(result);
+                long now = SystemClock.elapsedRealtime();
+                if (disconnected) {
+                    if (disconnectedSinceMs < 0L) disconnectedSinceMs = now;
+                    long disconnectedForMs = now - disconnectedSinceMs;
+                    long sinceLastRecoveryMs = lastAutoRecoveryMs < 0L
+                            ? Long.MAX_VALUE
+                            : now - lastAutoRecoveryMs;
+
+                    if (CodespaceReconnectPolicy.shouldRecover(
+                            true,
+                            true,
+                            disconnectedForMs,
+                            sinceLastRecoveryMs
+                    )) {
+                        lastAutoRecoveryMs = now;
+                        disconnectedSinceMs = -1L;
+                        observedWebView.reload();
+                        Toast.makeText(
+                                BrowserSessionActivity.this,
+                                "Reconnecting Codespaces…",
+                                Toast.LENGTH_SHORT
+                        ).show();
+                    }
+                } else {
+                    disconnectedSinceMs = -1L;
+                }
+            });
+
+            reconnectHandler.postDelayed(this, RECONNECT_POLL_MS);
+        }
+    };
 
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
+        configureSystemBars();
         buildInterface();
         installNewWebView();
 
         boolean restored = false;
         if (state != null) {
+            touchLocked = state.getBoolean(STATE_TOUCH_LOCKED, false);
             restored = webView.restoreState(state) != null;
         }
+        applyTouchLockState();
+
         if (!restored) {
             loadRecoveryUrl();
         } else {
@@ -62,10 +130,16 @@ public final class BrowserSessionActivity extends Activity {
         }
     }
 
+    private void configureSystemBars() {
+        getWindow().setStatusBarColor(0xFF1F232B);
+        getWindow().setNavigationBarColor(0xFF1F232B);
+    }
+
     private void buildInterface() {
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(0xFF111318);
+        rootLayout = new LinearLayout(this);
+        rootLayout.setOrientation(LinearLayout.VERTICAL);
+        rootLayout.setBackgroundColor(0xFF111318);
+        applySystemBarInsets(rootLayout);
 
         LinearLayout toolbar = new LinearLayout(this);
         toolbar.setGravity(Gravity.CENTER_VERTICAL);
@@ -76,36 +150,42 @@ public final class BrowserSessionActivity extends Activity {
         forwardButton = toolbarButton("›");
         Button homeButton = toolbarButton("⌂");
         Button reloadButton = toolbarButton("↻");
+        touchLockButton = toolbarButton("🔓");
         Button externalButton = toolbarButton("↗");
+
+        touchLockButton.setTextSize(16f);
+        touchLockButton.setContentDescription("Lock web touch input");
 
         toolbar.addView(backButton, toolbarParams());
         toolbar.addView(forwardButton, toolbarParams());
         toolbar.addView(homeButton, toolbarParams());
         toolbar.addView(reloadButton, toolbarParams());
+        toolbar.addView(touchLockButton, toolbarParams());
         toolbar.addView(externalButton, toolbarParams());
-        root.addView(toolbar, new LinearLayout.LayoutParams(
+        rootLayout.addView(toolbar, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(42)
+                dp(46)
         ));
 
         pageProgress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         pageProgress.setMax(100);
         pageProgress.setProgress(0);
         pageProgress.setVisibility(View.GONE);
-        root.addView(pageProgress, new LinearLayout.LayoutParams(
+        rootLayout.addView(pageProgress, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(2)
         ));
 
         webContainer = new FrameLayout(this);
         webContainer.setBackgroundColor(0xFF111318);
-        root.addView(webContainer, new LinearLayout.LayoutParams(
+        rootLayout.addView(webContainer, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 0,
                 1f
         ));
 
-        setContentView(root);
+        setContentView(rootLayout);
+        rootLayout.post(rootLayout::requestApplyInsets);
 
         backButton.setOnClickListener(v -> {
             if (webView != null && webView.canGoBack()) webView.goBack();
@@ -119,10 +199,38 @@ public final class BrowserSessionActivity extends Activity {
         reloadButton.setOnClickListener(v -> {
             if (webView != null) webView.reload();
         });
+        touchLockButton.setOnClickListener(v -> setTouchLocked(!touchLocked));
         externalButton.setOnClickListener(v -> {
             if (webView == null) return;
             String target = CodespaceUrlPolicy.recoveryUrlOrHome(webView.getUrl());
             openExternal(Uri.parse(target));
+        });
+    }
+
+    private void applySystemBarInsets(View root) {
+        root.setOnApplyWindowInsetsListener((view, windowInsets) -> {
+            int left;
+            int top;
+            int right;
+            int bottom;
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                Insets insets = windowInsets.getInsets(
+                        WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout()
+                );
+                left = insets.left;
+                top = insets.top;
+                right = insets.right;
+                bottom = insets.bottom;
+            } else {
+                left = windowInsets.getSystemWindowInsetLeft();
+                top = windowInsets.getSystemWindowInsetTop();
+                right = windowInsets.getSystemWindowInsetRight();
+                bottom = windowInsets.getSystemWindowInsetBottom();
+            }
+
+            view.setPadding(left, top, right, bottom);
+            return windowInsets;
         });
     }
 
@@ -137,12 +245,12 @@ public final class BrowserSessionActivity extends Activity {
         button.setMinimumWidth(0);
         button.setMinHeight(0);
         button.setMinimumHeight(0);
-        button.setPadding(dp(2), 0, dp(2), 0);
+        button.setPadding(dp(1), 0, dp(1), 0);
         return button;
     }
 
     private LinearLayout.LayoutParams toolbarParams() {
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(38), 1f);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(42), 1f);
         params.setMargins(dp(1), 0, dp(1), 0);
         return params;
     }
@@ -154,6 +262,7 @@ public final class BrowserSessionActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
         ));
+        applyTouchLockState();
         updateNavigationButtons();
     }
 
@@ -162,6 +271,7 @@ public final class BrowserSessionActivity extends Activity {
         view.setBackgroundColor(0xFF111318);
         view.setFocusable(true);
         view.setFocusableInTouchMode(true);
+        view.setOnTouchListener((ignored, event) -> touchLocked);
 
         WebSettings settings = view.getSettings();
         settings.setJavaScriptEnabled(true);
@@ -180,7 +290,7 @@ public final class BrowserSessionActivity extends Activity {
 
         String defaultUserAgent = settings.getUserAgentString();
         if (defaultUserAgent != null && !defaultUserAgent.contains("FantestCodespace/")) {
-            settings.setUserAgentString(defaultUserAgent + " FantestCodespace/1.0");
+            settings.setUserAgentString(defaultUserAgent + " FantestCodespace/1.0.1");
         }
 
         CookieManager cookies = CookieManager.getInstance();
@@ -210,19 +320,18 @@ public final class BrowserSessionActivity extends Activity {
                             .apply();
                     CookieManager.getInstance().flush();
                 }
+                disconnectedSinceMs = -1L;
                 updateNavigationButtons();
             }
 
             @Override
             public boolean onRenderProcessGone(WebView source, RenderProcessGoneDetail detail) {
                 if (source != webView) return false;
-                String recoveryUrl = CodespaceUrlPolicy.recoveryUrlOrHome(source.getUrl());
+
+                String recoveryUrl = getStoredRecoveryUrl();
                 webContainer.removeView(source);
                 source.destroy();
                 installNewWebView();
-                if (CodespaceUrlPolicy.HOME_URL.equals(recoveryUrl)) {
-                    recoveryUrl = getStoredRecoveryUrl();
-                }
                 webView.loadUrl(recoveryUrl);
                 Toast.makeText(
                         BrowserSessionActivity.this,
@@ -287,12 +396,14 @@ public final class BrowserSessionActivity extends Activity {
                 Toast.makeText(this, "Blocked non-HTTPS download", Toast.LENGTH_LONG).show();
                 return;
             }
+
             PendingDownload download = new PendingDownload(
                     url,
                     userAgent,
                     contentDisposition,
                     mimeType
             );
+
             if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P
                     && checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE)
                     != PackageManager.PERMISSION_GRANTED) {
@@ -303,10 +414,48 @@ public final class BrowserSessionActivity extends Activity {
                 );
                 return;
             }
+
             enqueueDownload(download);
         });
 
         return view;
+    }
+
+    private void setTouchLocked(boolean locked) {
+        touchLocked = locked;
+        applyTouchLockState();
+        Toast.makeText(
+                this,
+                locked ? "Touch input locked" : "Touch input unlocked",
+                Toast.LENGTH_SHORT
+        ).show();
+    }
+
+    private void applyTouchLockState() {
+        if (touchLockButton != null) {
+            touchLockButton.setText(touchLocked ? "🔒" : "🔓");
+            touchLockButton.setContentDescription(
+                    touchLocked ? "Unlock web touch input" : "Lock web touch input"
+            );
+        }
+        if (webView != null) {
+            webView.setFocusable(!touchLocked);
+            webView.setFocusableInTouchMode(!touchLocked);
+            if (touchLocked) {
+                webView.clearFocus();
+                hideKeyboard();
+            }
+        }
+    }
+
+    private void hideKeyboard() {
+        InputMethodManager keyboard =
+                (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+        if (keyboard == null) return;
+        View tokenView = webView != null ? webView : rootLayout;
+        if (tokenView != null) {
+            keyboard.hideSoftInputFromWindow(tokenView.getWindowToken(), 0);
+        }
     }
 
     private boolean handleNavigation(Uri uri) {
@@ -365,6 +514,7 @@ public final class BrowserSessionActivity extends Activity {
                     download.contentDisposition,
                     download.mimeType
             );
+
             DownloadManager.Request request = new DownloadManager.Request(uri);
             request.setTitle(fileName);
             request.setDescription("Downloaded from Fantest Codespace");
@@ -379,10 +529,12 @@ public final class BrowserSessionActivity extends Activity {
             if (download.userAgent != null && !download.userAgent.trim().isEmpty()) {
                 request.addRequestHeader("User-Agent", download.userAgent);
             }
+
             String cookie = CookieManager.getInstance().getCookie(download.url);
             if (cookie != null && !cookie.trim().isEmpty()) {
                 request.addRequestHeader("Cookie", cookie);
             }
+
             request.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName);
             DownloadManager manager = (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
             if (manager == null) throw new IllegalStateException("DownloadManager unavailable");
@@ -412,6 +564,7 @@ public final class BrowserSessionActivity extends Activity {
                     results = WebChromeClient.FileChooserParams.parseResult(resultCode, data);
                 }
             }
+
             if (fileChooserCallback != null) {
                 fileChooserCallback.onReceiveValue(results);
                 fileChooserCallback = null;
@@ -429,9 +582,11 @@ public final class BrowserSessionActivity extends Activity {
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode != REQUEST_STORAGE) return;
+
         PendingDownload download = pendingDownload;
         pendingDownload = null;
         if (download == null) return;
+
         if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
             enqueueDownload(download);
         } else {
@@ -440,13 +595,26 @@ public final class BrowserSessionActivity extends Activity {
     }
 
     @Override
+    protected void onResume() {
+        super.onResume();
+        appForeground = true;
+        disconnectedSinceMs = -1L;
+        reconnectHandler.removeCallbacks(reconnectProbe);
+        reconnectHandler.postDelayed(reconnectProbe, RECONNECT_POLL_MS);
+    }
+
+    @Override
     protected void onSaveInstanceState(Bundle outState) {
+        outState.putBoolean(STATE_TOUCH_LOCKED, touchLocked);
         if (webView != null) webView.saveState(outState);
         super.onSaveInstanceState(outState);
     }
 
     @Override
     protected void onPause() {
+        appForeground = false;
+        disconnectedSinceMs = -1L;
+        reconnectHandler.removeCallbacks(reconnectProbe);
         CookieManager.getInstance().flush();
         super.onPause();
     }
@@ -462,6 +630,8 @@ public final class BrowserSessionActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        appForeground = false;
+        reconnectHandler.removeCallbacksAndMessages(null);
         if (fileChooserCallback != null) {
             fileChooserCallback.onReceiveValue(null);
             fileChooserCallback = null;
