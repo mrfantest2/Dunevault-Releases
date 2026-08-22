@@ -54,10 +54,12 @@ public final class BrowserSessionActivity extends Activity {
     private static final int REQUEST_FILE_CHOOSER = 6401;
     private static final int REQUEST_STORAGE = 6402;
     private static final int REQUEST_NOTIFICATIONS = 6403;
+    private static final int REQUEST_SCREENSHOT_STORAGE = 6404;
 
     private static final String PREF_LAST_HTTPS_URL = "last_https_url";
     private static final String PREF_SETUP_PROMPTED_V102 = "background_setup_prompted_v102";
     private static final String STATE_TOUCH_LOCKED = "touch_locked";
+    private static final String STATE_KEYBOARD_LOCKED = "keyboard_locked";
 
     private static final long CONNECTION_PROBE_INTERVAL_MS = 3_000L;
 
@@ -72,9 +74,13 @@ public final class BrowserSessionActivity extends Activity {
                     "return 'healthy';}catch(e){return 'healthy';}})();";
 
     private static final int MENU_KEEP_ALIVE = 1;
-    private static final int MENU_BACKGROUND_SETUP = 2;
-    private static final int MENU_RECONNECT = 3;
-    private static final int MENU_EXTERNAL = 4;
+    private static final int MENU_KEYBOARD_LOCK = 2;
+    private static final int MENU_SCREENSHOT = 3;
+    private static final int MENU_COPY_CHAT = 4;
+    private static final int MENU_PASTE_SEND = 5;
+    private static final int MENU_BACKGROUND_SETUP = 6;
+    private static final int MENU_RECONNECT = 7;
+    private static final int MENU_EXTERNAL = 8;
 
     private final Handler reconnectHandler = new Handler(Looper.getMainLooper());
     private final CodespaceReconnectPolicy reconnectPolicy = new CodespaceReconnectPolicy();
@@ -95,6 +101,7 @@ public final class BrowserSessionActivity extends Activity {
     private volatile boolean networkValidated;
     private boolean appForeground;
     private boolean touchLocked;
+    private boolean keyboardLocked;
 
     private final Runnable reconnectProbe = new Runnable() {
         @Override
@@ -131,6 +138,7 @@ public final class BrowserSessionActivity extends Activity {
         CodespaceKeepAliveService.start(this);
 
         touchLocked = state != null && state.getBoolean(STATE_TOUCH_LOCKED, false);
+        keyboardLocked = state != null && state.getBoolean(STATE_KEYBOARD_LOCKED, false);
         configureSystemBars();
         buildInterface();
         installNewWebView();
@@ -144,7 +152,7 @@ public final class BrowserSessionActivity extends Activity {
             loadRecoveryUrl();
         } else {
             updateNavigationButtons();
-            applyTouchLock();
+            applyInputModeState();
         }
 
         maybeShowBackgroundSetup();
@@ -229,7 +237,7 @@ public final class BrowserSessionActivity extends Activity {
         });
         touchLockButton.setOnClickListener(v -> {
             touchLocked = !touchLocked;
-            applyTouchLock();
+            applyInputModeState();
             Toast.makeText(
                     this,
                     touchLocked ? "Touch Lock enabled" : "Touch Lock disabled",
@@ -303,11 +311,51 @@ public final class BrowserSessionActivity extends Activity {
         PopupMenu popup = new PopupMenu(this, anchor);
         MenuItem keepAlive = popup.getMenu().add(0, MENU_KEEP_ALIVE, 0, "Keep Alive: Active");
         keepAlive.setEnabled(false);
-        popup.getMenu().add(0, MENU_BACKGROUND_SETUP, 1, "Background setup");
-        popup.getMenu().add(0, MENU_RECONNECT, 2, "Reconnect now");
-        popup.getMenu().add(0, MENU_EXTERNAL, 3, "Open in browser");
+        MenuItem keyboardLock = popup.getMenu().add(
+                0,
+                MENU_KEYBOARD_LOCK,
+                1,
+                keyboardLocked ? "Keyboard Lock: On" : "Keyboard Lock: Off"
+        );
+        keyboardLock.setCheckable(true);
+        keyboardLock.setChecked(keyboardLocked);
+        popup.getMenu().add(0, MENU_SCREENSHOT, 2, "Save screenshot");
+        popup.getMenu().add(0, MENU_COPY_CHAT, 3, "Copy last chat output");
+        popup.getMenu().add(0, MENU_PASTE_SEND, 4, "Paste prompt & send");
+        popup.getMenu().add(0, MENU_BACKGROUND_SETUP, 5, "Background setup");
+        popup.getMenu().add(0, MENU_RECONNECT, 6, "Reconnect now");
+        popup.getMenu().add(0, MENU_EXTERNAL, 7, "Open in browser");
         popup.setOnMenuItemClickListener(item -> {
             switch (item.getItemId()) {
+                case MENU_KEYBOARD_LOCK:
+                    keyboardLocked = !keyboardLocked;
+                    applyInputModeState();
+                    Toast.makeText(
+                            this,
+                            keyboardLocked ? "Keyboard Lock enabled" : "Keyboard Lock disabled",
+                            Toast.LENGTH_SHORT
+                    ).show();
+                    return true;
+                case MENU_SCREENSHOT:
+                    requestScreenshot();
+                    return true;
+                case MENU_COPY_CHAT:
+                    if (webView != null) {
+                        BrowserUtilityActions.copyLastChatOutput(this, webView);
+                    }
+                    return true;
+                case MENU_PASTE_SEND:
+                    if (webView != null) {
+                        WebView target = webView;
+                        prepareProgrammaticChatInput();
+                        BrowserUtilityActions.pasteClipboardPromptAndSend(
+                                this,
+                                target,
+                                reconnectHandler,
+                                this::applyInputModeState
+                        );
+                    }
+                    return true;
                 case MENU_BACKGROUND_SETUP:
                     showBackgroundSetup();
                     return true;
@@ -330,6 +378,28 @@ public final class BrowserSessionActivity extends Activity {
         popup.show();
     }
 
+    private void requestScreenshot() {
+        if (webView == null) return;
+        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P
+                && checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(
+                    new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE},
+                    REQUEST_SCREENSHOT_STORAGE
+            );
+            return;
+        }
+        BrowserUtilityActions.saveVisibleWebViewScreenshot(this, webView);
+    }
+
+    private void prepareProgrammaticChatInput() {
+        if (webView == null) return;
+        webView.setFocusable(true);
+        webView.setFocusableInTouchMode(true);
+        webView.setShowSoftInputOnFocus(false);
+        hideKeyboard();
+    }
+
     private void installNewWebView() {
         webView = createConfiguredWebView();
         webContainer.removeAllViews();
@@ -337,7 +407,7 @@ public final class BrowserSessionActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
         ));
-        applyTouchLock();
+        applyInputModeState();
         updateNavigationButtons();
     }
 
@@ -347,7 +417,7 @@ public final class BrowserSessionActivity extends Activity {
         view.setFocusable(true);
         view.setFocusableInTouchMode(true);
         view.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false);
-        view.setOnTouchListener((ignored, event) -> touchLocked);
+        view.setOnTouchListener((ignored, event) -> InputModePolicy.shouldConsumeTouch(touchLocked));
 
         WebSettings settings = view.getSettings();
         settings.setJavaScriptEnabled(true);
@@ -493,16 +563,19 @@ public final class BrowserSessionActivity extends Activity {
         return view;
     }
 
-    private void applyTouchLock() {
+    private void applyInputModeState() {
         if (webView != null) {
+            boolean focusable = InputModePolicy.shouldKeepWebViewFocusable(touchLocked);
+            webView.setFocusable(focusable);
+            webView.setFocusableInTouchMode(focusable);
+            webView.setShowSoftInputOnFocus(
+                    InputModePolicy.shouldShowSoftInput(touchLocked, keyboardLocked)
+            );
             if (touchLocked) {
                 webView.clearFocus();
-                webView.setFocusable(false);
-                webView.setFocusableInTouchMode(false);
+            }
+            if (touchLocked || keyboardLocked) {
                 hideKeyboard();
-            } else {
-                webView.setFocusable(true);
-                webView.setFocusableInTouchMode(true);
             }
         }
         updateTouchLockButton();
@@ -925,6 +998,21 @@ public final class BrowserSessionActivity extends Activity {
             return;
         }
 
+        if (requestCode == REQUEST_SCREENSHOT_STORAGE) {
+            boolean granted = grantResults.length > 0
+                    && grantResults[0] == PackageManager.PERMISSION_GRANTED;
+            if (granted && webView != null) {
+                BrowserUtilityActions.saveVisibleWebViewScreenshot(this, webView);
+            } else {
+                Toast.makeText(
+                        this,
+                        "Storage permission is required to save screenshots on this Android version",
+                        Toast.LENGTH_LONG
+                ).show();
+            }
+            return;
+        }
+
         if (requestCode != REQUEST_STORAGE) return;
         PendingDownload download = pendingDownload;
         pendingDownload = null;
@@ -939,6 +1027,7 @@ public final class BrowserSessionActivity extends Activity {
     @Override
     protected void onSaveInstanceState(Bundle outState) {
         outState.putBoolean(STATE_TOUCH_LOCKED, touchLocked);
+        outState.putBoolean(STATE_KEYBOARD_LOCKED, keyboardLocked);
         if (webView != null) webView.saveState(outState);
         super.onSaveInstanceState(outState);
     }
