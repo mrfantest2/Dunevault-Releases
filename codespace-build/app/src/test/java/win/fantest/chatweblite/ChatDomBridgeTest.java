@@ -1,0 +1,37 @@
+package win.fantest.chatweblite;
+
+import org.junit.Test;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
+
+public final class ChatDomBridgeTest {
+    @Test
+    public void escapesClipboardTextForSingleQuotedJavaScript() {
+        String value = "a'b\\c\n\r\t\u2028\u2029";
+        assertEquals(
+                "a\\'b\\\\c\\n\\r\\t\\u2028\\u2029",
+                ChatDomBridge.escapeForSingleQuotedJavaScript(value)
+        );
+    }
+
+    @Test
+    public void copyScriptTargetsRenderedAssistantResponses() {
+        String script = ChatDomBridge.copyLastOutputScript();
+        assertTrue(script.contains("interactive-item-container.interactive-response"));
+        assertTrue(script.contains(".rendered-markdown"));
+        assertTrue(script.contains("workbench.panel.chat"));
+        assertTrue(script.contains("agent-sessions-workbench"));
+    }
+
+    @Test
+    public void pasteSendScriptTargetsVsCodeChatInputAndSendAction() {
+        String script = ChatDomBridge.pasteAndSendScript("hello 'world'");
+        assertTrue(script.contains("interactive-input-part"));
+        assertTrue(script.contains("monaco-editor[role=\\\"code\\\"]"));
+        assertTrue(script.contains("textarea"));
+        assertTrue(script.contains("native-edit-context"));
+        assertTrue(script.contains("codicon-arrow-up-compact"));
+        assertTrue(script.contains("hello \\'world\\'"));
+    }
+}
