@@ -68,7 +68,7 @@ jobs:
           profile: pixel_6
           disable-animations: true
           script: |
-            set -euxo pipefail
+            set -eu
             cd codespace-build
             APK="app/build/outputs/apk/debug/app-debug.apk"
             PKG="win.fantest.codespace.debug"
