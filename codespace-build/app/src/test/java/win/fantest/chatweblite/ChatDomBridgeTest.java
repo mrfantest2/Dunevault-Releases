@@ -35,6 +35,15 @@ public final class ChatDomBridgeTest {
     }
 
     @Test
+    public void pasteScriptUsesMonacoClipboardEventPath() {
+        String script = ChatDomBridge.pastePromptScript("hello");
+        assertTrue(script.contains("new DataTransfer()"));
+        assertTrue(script.contains("setData('text/plain',text)"));
+        assertTrue(script.contains("new ClipboardEvent('paste'"));
+        assertTrue(script.contains("dispatchEvent(paste)"));
+    }
+
+    @Test
     public void sendScriptTargetsEnabledVsCodeSendAction() {
         String script = ChatDomBridge.sendPromptScript();
         assertTrue(script.contains("chat-execute-toolbar"));
