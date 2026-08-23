@@ -1,5 +1,6 @@
 package win.fantest.chatweblite;
 
+import android.app.Activity;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -21,6 +22,14 @@ public final class CodespaceKeepAliveService extends Service {
 
     public static void start(Context context) {
         if (context == null) return;
+
+        // BrowserSessionActivity configures its WindowInsetsController immediately after
+        // starting this service. Android 15 can otherwise leave PhoneWindow.mDecor null
+        // until setContentView(), causing getInsetsController() to crash on first launch.
+        if (context instanceof Activity) {
+            ((Activity) context).getWindow().getDecorView();
+        }
+
         Intent intent = new Intent(context, CodespaceKeepAliveService.class);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             context.startForegroundService(intent);
