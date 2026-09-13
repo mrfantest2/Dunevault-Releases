@@ -57,13 +57,14 @@ jobs:
         run: |
           set -euo pipefail
           bash tools/StructureTests.sh
+          rm -rf /tmp/fbt-pure
           mkdir -p /tmp/fbt-pure
           javac -d /tmp/fbt-pure \
             app/src/main/java/win/fantest/bandtools/EndpointPolicy.java \
             app/src/main/java/win/fantest/bandtools/DiagnosticHistory.java \
             app/src/main/java/win/fantest/bandtools/CompanionReadiness.java \
             tools/PureTests.java
-          java -cp /tmp/fbt-pure PureTests
+          java -cp /tmp/fbt-pure win.fantest.bandtools.PureTests
 
       - name: Unit tests and release APK
         working-directory: buildsrc
