@@ -1,0 +1,9 @@
+<resources>
+    <color name="app_background">#111318</color>
+    <color name="toolbar_background">#1F232B</color>
+    <color name="toolbar_active">#264F78</color>
+    <color name="toolbar_pressed">#343A46</color>
+    <color name="primary">#58A6FF</color>
+    <color name="primary_dark">#1F6FEB</color>
+    <color name="text_primary">#F0F3F6</color>
+</resources>
